@@ -56,16 +56,19 @@ void unlock_mutex(void *user, int lock) {
 		fail("pthread_mutex_unlock()");
 }
 
-typedef fz_locks_context fz_locks_context_t;
-
-fz_locks_context_t* create_fz_locks_context() {
-	pthread_mutex_t mutex[FZ_LOCK_MAX];
+pthread_mutex_t* new_mutex() {
+	pthread_mutex_t* mutex = malloc(sizeof(pthread_mutex_t) * FZ_LOCK_MAX);
 
 	for (int i = 0; i < FZ_LOCK_MAX; i++) {
 		if (pthread_mutex_init(&mutex[i], NULL) != 0)
 			fail("pthread_mutex_init()");
 	}
+	return mutex;
+}
 
+typedef fz_locks_context fz_locks_context_t;
+
+fz_locks_context_t* create_fz_locks_context(pthread_mutex_t* mutex) {
 	fz_locks_context* lock_ctx = malloc(sizeof(fz_locks_context));
 	lock_ctx->user = mutex;
 	lock_ctx->lock = lock_mutex;
@@ -105,7 +108,10 @@ type Document struct {
 	doc    *C.struct_fz_document
 	mtx    sync.Mutex
 	stream *C.fz_stream
-	locks  *C.fz_locks_context_t // needed for multithreading
+
+	// needed for multithreading
+	locks  *C.fz_locks_context_t
+	mutexs *C.pthread_mutex_t
 }
 
 // Outline type.
@@ -143,7 +149,7 @@ func New(filename string, options ...Option) (f *Document, err error) {
 	}
 
 	if opts.concurency {
-		f.locks = (*C.fz_locks_context_t)(unsafe.Pointer(C.create_fz_locks_context()))
+		f.initMultiThread()
 	}
 
 	f.ctx = (*C.struct_fz_context)(unsafe.Pointer(C.fz_new_context_imp(
@@ -183,7 +189,7 @@ func NewFromMemory(b []byte, options ...Option) (f *Document, err error) {
 	opts := buildOpts(options...)
 
 	if opts.concurency {
-		f.locks = (*C.fz_locks_context_t)(unsafe.Pointer(C.create_fz_locks_context()))
+		f.initMultiThread()
 	}
 
 	f.ctx = (*C.struct_fz_context)(unsafe.Pointer(C.fz_new_context_imp(nil, f.locks, C.FZ_STORE_UNLIMITED, C.fz_version)))
@@ -252,8 +258,8 @@ func (f *Document) Image(pageNumber int) (image.Image, error) {
 
 // ImageDPI returns image for given page number and DPI.
 func (f *Document) ImageDPI(pageNumber int, dpi float64) (image.Image, error) {
-	f.mtx.Lock()
-	defer f.mtx.Unlock()
+	// f.mtx.Lock()
+	// defer f.mtx.Unlock()
 
 	img := image.RGBA{}
 
@@ -610,10 +616,21 @@ func (f *Document) Close() error {
 		f.locks = nil
 	}
 
+	if f.mutexs != nil {
+		C.free(unsafe.Pointer(f.locks))
+		f.mutexs = nil
+	}
+
 	C.fz_drop_document(f.ctx, f.doc)
 	C.fz_drop_context(f.ctx)
 
 	f.data = nil
 
 	return nil
+}
+
+// Set up the locks
+func (f *Document) initMultiThread() {
+	f.mutexs = C.new_mutex()
+	f.locks = C.create_fz_locks_context(f.mutexs)
 }

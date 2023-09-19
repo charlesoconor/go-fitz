@@ -13,7 +13,9 @@ import (
 )
 
 func TestImage(t *testing.T) {
-	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
+	t.Parallel()
+
+	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"), fitz.Concurency)
 	if err != nil {
 		t.Error(err)
 	}
@@ -24,6 +26,7 @@ func TestImage(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	defer os.RemoveAll(tmpDir)
 
 	for n := 0; n < doc.NumPage(); n++ {
 		img, err := doc.Image(n)
@@ -46,6 +49,8 @@ func TestImage(t *testing.T) {
 }
 
 func TestImageFromMemory(t *testing.T) {
+	t.Parallel()
+
 	b, err := os.ReadFile(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -86,6 +91,8 @@ func TestImageFromMemory(t *testing.T) {
 }
 
 func TestLinks(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -108,6 +115,8 @@ func TestLinks(t *testing.T) {
 }
 
 func TestText(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -119,6 +128,8 @@ func TestText(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+
+	defer os.RemoveAll(tmpDir)
 
 	for n := 0; n < doc.NumPage(); n++ {
 		text, err := doc.Text(n)
@@ -141,6 +152,8 @@ func TestText(t *testing.T) {
 }
 
 func TestHTML(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -174,6 +187,8 @@ func TestHTML(t *testing.T) {
 }
 
 func TestSVG(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -207,6 +222,8 @@ func TestSVG(t *testing.T) {
 }
 
 func TestToC(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -221,6 +238,8 @@ func TestToC(t *testing.T) {
 }
 
 func TestMetadata(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
@@ -235,6 +254,8 @@ func TestMetadata(t *testing.T) {
 }
 
 func TestBound(t *testing.T) {
+	t.Parallel()
+
 	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
 	if err != nil {
 		t.Error(err)
