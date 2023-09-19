@@ -35,22 +35,15 @@ fz_document *open_document_with_stream(fz_context *ctx, const char *magic, fz_st
 	return doc;
 }
 
-extern void lockGo(void *user, int lock);
-extern void unlockGo(void *user, int lock);
-
-void lock_mutex(void *user, int lock) {
-	lockGo(user, lock);
-}
-
-void unlock_mutex(void *user, int lock) {
-	unlockGo(user, lock);
-}
-
-fz_locks_context *create_fz_locks_context(void *user) {
+fz_locks_context *create_fz_locks_context(
+	void *user,
+	void (*lock)(void *user, int lock),
+	void (*unlock)(void *user, int lock)
+) {
 	fz_locks_context* lock_ctx = malloc(sizeof(fz_locks_context));
 	lock_ctx->user = user;
-	// lock_ctx->lock = lock_mutex;
-	// lock_ctx->unlock = unlock_mutex;
+	lock_ctx->lock = lock;
+	lock_ctx->unlock = unlock;
 	return lock_ctx;
 }
 */
@@ -65,6 +58,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/gen2brain/go-fitz/locks"
 	"github.com/gen2brain/go-fitz/pointer"
 )
 
@@ -589,13 +583,15 @@ type CLock struct {
 }
 
 func newLocks() *CLock {
-	locks := &CLock{}
+	l := &CLock{}
 
-	locks.ctx = C.create_fz_locks_context(
-		pointer.Save(&locks.locks),
+	l.ctx = C.create_fz_locks_context(
+		pointer.Save(&l.locks),
+		(*[0]byte)(locks.LockGo),
+		(*[0]byte)(locks.UnlockGo),
 	)
 
-	return locks
+	return l
 }
 
 func (l *CLock) Close() {

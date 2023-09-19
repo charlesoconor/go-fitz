@@ -1,21 +1,21 @@
-package fitz
+package locks
 
 /*
-extern void lockGo(void *user, int lock);
-extern void unlockGo(void *user, int lock);
+extern void Lock(void* l, int lock);
+extern void Unlock(void* l, int lock);
 */
 import "C"
 import "unsafe"
 
-// export lockGo
-func Lock(l unsafe.Pointer, lock int) {
+//export Lock
+func Lock(l unsafe.Pointer, lock int32) {
 	// l.(*CLock).locks[lock].Lock()
 }
 
-// export unlockGo
-func Unlock(l unsafe.Pointer, lock int) {
+//export Unlock
+func Unlock(l unsafe.Pointer, lock int32) {
 	// l.(*CLock).locks[lock].Unlock()
 }
 
-var LockGo = C.lockGo
-var UnlockGo = C.unlockGo
+var LockGo = C.Lock
+var UnlockGo = C.Unlock
