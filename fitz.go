@@ -7,6 +7,7 @@ package fitz
 #include <stdlib.h>
 
 const char *fz_version = FZ_VERSION;
+const int fz_lock_max = FZ_LOCK_MAX;
 
 fz_document *open_document(fz_context *ctx, const char *filename) {
 	fz_document *doc;
@@ -32,6 +33,17 @@ fz_document *open_document_with_stream(fz_context *ctx, const char *magic, fz_st
 	}
 
 	return doc;
+}
+
+void lock_mutex(void *user, int lock);
+void unlock_mutex(void *user, int lock);
+
+fz_locks_context *create_fz_locks_context(void *user) {
+	fz_locks_context* lock_ctx = malloc(sizeof(fz_locks_context));
+	lock_ctx->user = user;
+	lock_ctx->lock = lock_mutex;
+	lock_ctx->unlock = unlock_mutex;
+	return lock_ctx;
 }
 */
 import "C"
@@ -561,37 +573,32 @@ func (f *Document) Close() error {
 type CLock struct {
 	// Need to hold onto a reference to the go locks so
 	// they won't be gc'ed before this object's lifetime ends.
-	locks []sync.Mutex
+	locks [C.fz_lock_max]sync.Mutex
 
-	ctx *C.struct_fz_locks_context
+	ctx interface{}
 }
 
 func newLocks(numLocks int) *CLock {
-	locks := make([]sync.Mutex, numLocks)
+	locks := &CLock{}
 
-	var ctx *C.struct_fz_locks_context
-	ctx = (*C.struct_fz_locks_context)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_fz_locks_context{}))))
-	// ctx.user = locks
-	// ctx.lock = Lock
-	// ctx.unlock = Unlock
+	locks.ctx = C.create_fz_locks_context(
+		unsafe.Pointer(&locks),
+	)
 
-	return &CLock{
-		locks: locks,
-		ctx:   ctx,
-	}
-
+	return locks
 }
 
 func (l *CLock) Close() {
-	C.free(unsafe.Pointer(l.ctx))
-	l.ctx = nil
-	l.locks = nil
+	// C.free(unsafe.Pointer(l.ctx))
+	// C.free(l.ctx)
 }
 
-func Lock(l interface{}, lock int) {
+// export lock_mutex
+func lock(l interface{}, lock int) {
 	l.(*CLock).locks[lock].Lock()
 }
 
-func Unlock(l interface{}, lock int) {
+// export unlock_mutex
+func unlock(l interface{}, lock int) {
 	l.(*CLock).locks[lock].Unlock()
 }
