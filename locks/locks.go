@@ -16,3 +16,6 @@ func Lock(l unsafe.Pointer, lock int) {
 func Unlock(l unsafe.Pointer, lock int) {
 	// l.(*CLock).locks[lock].Unlock()
 }
+
+var LockGo = C.lockGo
+var UnlockGo = C.unlockGo
