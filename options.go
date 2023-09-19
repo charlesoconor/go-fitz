@@ -1,7 +1,7 @@
 package fitz
 
 type Options struct {
-	concurency int
+	concurency bool
 }
 
 type Option func(*Options)
@@ -10,10 +10,8 @@ type Option func(*Options)
 // mupdf ctx. This will allow us to run more threads at once touching
 // the object but at the cost of more memory since there are some heavy
 // copies.
-func Concurency(threads int) Option {
-	return func(opt *Options) {
-		opt.concurency = threads
-	}
+func Concurency(opt *Options) {
+	opt.concurency = true
 }
 
 func buildOpts(options ...Option) Options {

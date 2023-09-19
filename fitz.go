@@ -3,6 +3,8 @@
 package fitz
 
 /*
+#cgo CFLAGS: -I./include
+
 #include <mupdf/fitz.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -54,8 +56,9 @@ void unlock_mutex(void *user, int lock) {
 		fail("pthread_mutex_unlock()");
 }
 
+typedef fz_locks_context fz_locks_context_t;
 
-fz_locks_context *create_fz_locks_context() {
+fz_locks_context_t* create_fz_locks_context() {
 	pthread_mutex_t mutex[FZ_LOCK_MAX];
 
 	for (int i = 0; i < FZ_LOCK_MAX; i++) {
@@ -102,6 +105,7 @@ type Document struct {
 	doc    *C.struct_fz_document
 	mtx    sync.Mutex
 	stream *C.fz_stream
+	locks  *C.fz_locks_context_t // needed for multithreading
 }
 
 // Outline type.
@@ -124,8 +128,9 @@ type Link struct {
 }
 
 // New returns new fitz document.
-func New(filename string) (f *Document, err error) {
+func New(filename string, options ...Option) (f *Document, err error) {
 	f = &Document{}
+	opts := buildOpts(options...)
 
 	filename, err = filepath.Abs(filename)
 	if err != nil {
@@ -137,7 +142,16 @@ func New(filename string) (f *Document, err error) {
 		return
 	}
 
-	f.ctx = (*C.struct_fz_context)(unsafe.Pointer(C.fz_new_context_imp(nil, nil, C.FZ_STORE_UNLIMITED, C.fz_version)))
+	if opts.concurency {
+		f.locks = (*C.fz_locks_context_t)(unsafe.Pointer(C.create_fz_locks_context()))
+	}
+
+	f.ctx = (*C.struct_fz_context)(unsafe.Pointer(C.fz_new_context_imp(
+		nil,
+		f.locks,
+		C.FZ_STORE_UNLIMITED,
+		C.fz_version,
+	)))
 	if f.ctx == nil {
 		err = ErrCreateContext
 		return
@@ -164,10 +178,15 @@ func New(filename string) (f *Document, err error) {
 }
 
 // NewFromMemory returns new fitz document from byte slice.
-func NewFromMemory(b []byte) (f *Document, err error) {
+func NewFromMemory(b []byte, options ...Option) (f *Document, err error) {
 	f = &Document{}
+	opts := buildOpts(options...)
 
-	f.ctx = (*C.struct_fz_context)(unsafe.Pointer(C.fz_new_context_imp(nil, nil, C.FZ_STORE_UNLIMITED, C.fz_version)))
+	if opts.concurency {
+		f.locks = (*C.fz_locks_context_t)(unsafe.Pointer(C.create_fz_locks_context()))
+	}
+
+	f.ctx = (*C.struct_fz_context)(unsafe.Pointer(C.fz_new_context_imp(nil, f.locks, C.FZ_STORE_UNLIMITED, C.fz_version)))
 	if f.ctx == nil {
 		err = ErrCreateContext
 		return
@@ -209,14 +228,14 @@ func NewFromMemory(b []byte) (f *Document, err error) {
 }
 
 // NewFromReader returns new fitz document from io.Reader.
-func NewFromReader(r io.Reader) (f *Document, err error) {
+func NewFromReader(r io.Reader, options ...Option) (f *Document, err error) {
 	b, e := io.ReadAll(r)
 	if e != nil {
 		err = e
 		return
 	}
 
-	f, err = NewFromMemory(b)
+	f, err = NewFromMemory(b, options...)
 
 	return
 }
@@ -586,28 +605,15 @@ func (f *Document) Close() error {
 		C.fz_drop_stream(f.ctx, f.stream)
 	}
 
+	if f.locks != nil {
+		C.free(unsafe.Pointer(f.locks))
+		f.locks = nil
+	}
+
 	C.fz_drop_document(f.ctx, f.doc)
 	C.fz_drop_context(f.ctx)
 
 	f.data = nil
 
 	return nil
-}
-
-type CLock struct {
-	ctx C.struct_fz_locks_context
-}
-
-func newLocks() *CLock {
-	l := &CLock{}
-
-	l.ctx = C.create_fz_locks_context()
-
-	return l
-}
-
-func (l *CLock) Close() {
-	// pointer.Unref(&l.locks)
-	// C.free(unsafe.Pointer(l.ctx))
-	// C.free(l.ctx)
 }
