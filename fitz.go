@@ -79,6 +79,7 @@ fz_locks_context_t* create_fz_locks_context(pthread_mutex_t* mutex) {
 import "C"
 
 import (
+	"context"
 	"errors"
 	"image"
 	"io"
@@ -99,6 +100,7 @@ var (
 	ErrPixmapSamples = errors.New("fitz: cannot get pixmap samples")
 	ErrNeedsPassword = errors.New("fitz: document needs password")
 	ErrLoadOutline   = errors.New("fitz: cannot load outline")
+	ErrConcurency    = errors.New("fitz: cant run concurrently")
 )
 
 // Document represents fitz document.
@@ -627,6 +629,125 @@ func (f *Document) Close() error {
 	f.data = nil
 
 	return nil
+}
+
+type resp struct {
+	idx int
+	img image.Image
+	err error
+}
+
+func (f *Document) ImagesAll(ctx context.Context, dpi float64) ([]image.Image, error) {
+	// If we haven't applied locks to the context then
+	// when we try to clone it it will fail.
+	if f.locks != nil {
+		return nil, ErrConcurency
+	}
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+
+	numPages := f.NumPage()
+	imgs := make([]image.Image, numPages)
+
+	c := make(chan resp, numPages)
+	defer close(c)
+
+	for i := 0; i < numPages; i++ {
+		displayList := C.fz_new_display_list_from_page_number(f.ctx, f.doc, C.int(i))
+		go renderImg(
+			ctx,
+			i,
+			c,
+			dpi,
+			f.ctx,
+			displayList,
+		)
+	}
+
+	for i := 0; i < numPages; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case r := <-c:
+			imgs[i] = r.img
+		}
+	}
+
+	return imgs, nil
+}
+
+func renderImg(
+	goCtx context.Context,
+	idx int,
+	c chan<- resp,
+	dpi float64,
+	rootCtx *C.fz_context,
+	displayList *C.fz_display_list,
+) {
+	// This thread takes ownership of the display list so
+	// we need to clean up the memory here.
+	defer C.fz_drop_display_list(rootCtx, displayList)
+
+	select {
+	case <-goCtx.Done():
+		c <- resp{
+			err: goCtx.Err(),
+		}
+		return
+	default:
+	}
+
+	ctx = C.fz_clone_context(rootCtx)
+	defer C.fz_drop_context(ctx)
+
+	var bounds C.fz_rect
+	bounds = C.fz_bound_display_list(ctx, displayList)
+
+	var ctm C.fz_matrix
+	ctm = C.fz_scale(C.float(dpi/72), C.float(dpi/72))
+
+	var bbox C.fz_irect
+	bounds = C.fz_transform_rect(bounds, ctm)
+	bbox = C.fz_round_rect(bounds)
+
+	pixmap := C.fz_new_pixmap_with_bbox(ctx, C.fz_device_rgb(ctx), bbox, nil, 1)
+	if pixmap == nil {
+		c <- resp{
+			idx: idx,
+			err: ErrCreatePixmap,
+		}
+		return
+	}
+
+	device := C.fz_new_draw_device(ctx, ctm, pixmap)
+	C.fz_enable_device_hints(ctx, device, C.FZ_NO_CACHE)
+	defer func() {
+		C.fz_close_device(ctx, device)
+		C.fz_drop_device(ctx, device)
+	}()
+
+	drawMatrix := C.fz_identity
+	C.fz_run_display_list(ctx, displayList, device, drawMatrix, bounds, nil)
+
+	pixels := C.fz_pixmap_samples(ctx, pixmap)
+	if pixels == nil {
+		c <- resp{
+			idx: idx,
+			err: ErrPixmapSamples,
+		}
+		return
+	}
+	defer C.free(unsafe.Pointer(pixels))
+
+	img := &image.RGBA{}
+	img.Pix = C.GoBytes(unsafe.Pointer(pixels), C.int(4*bbox.x1*bbox.y1))
+	img.Rect = image.Rect(int(bbox.x0), int(bbox.y0), int(bbox.x1), int(bbox.y1))
+	img.Stride = 4 * img.Rect.Max.X
+
+	c <- resp{
+		idx: idx,
+		img: img,
+	}
 }
 
 // Set up the locks
