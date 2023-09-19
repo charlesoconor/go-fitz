@@ -1,7 +1,5 @@
-package locks
-
 /*
-#include <mupdf/fitz.h>
+#include "mupdf/fitz.h"
 */
 import "C"
 
