@@ -5,9 +5,9 @@ package fitz
 /*
 #include <mupdf/fitz.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 const char *fz_version = FZ_VERSION;
-const int fz_lock_max = FZ_LOCK_MAX;
 
 fz_document *open_document(fz_context *ctx, const char *filename) {
 	fz_document *doc;
@@ -35,15 +35,38 @@ fz_document *open_document_with_stream(fz_context *ctx, const char *magic, fz_st
 	return doc;
 }
 
-fz_locks_context *create_fz_locks_context(
-	void *user,
-	void (*lock)(void *user, int lock),
-	void (*unlock)(void *user, int lock)
-) {
+void fail(char *msg) {
+	fprintf(stderr, "%s\n", msg);
+	abort();
+}
+
+void lock_mutex(void *user, int lock) {
+	pthread_mutex_t *mutex = (pthread_mutex_t *) user;
+
+	if (pthread_mutex_lock(&mutex[lock]) != 0)
+		fail("pthread_mutex_lock()");
+}
+
+void unlock_mutex(void *user, int lock) {
+	pthread_mutex_t *mutex = (pthread_mutex_t *) user;
+
+	if (pthread_mutex_unlock(&mutex[lock]) != 0)
+		fail("pthread_mutex_unlock()");
+}
+
+
+fz_locks_context *create_fz_locks_context() {
+	pthread_mutex_t mutex[FZ_LOCK_MAX];
+
+	for (int i = 0; i < FZ_LOCK_MAX; i++) {
+		if (pthread_mutex_init(&mutex[i], NULL) != 0)
+			fail("pthread_mutex_init()");
+	}
+
 	fz_locks_context* lock_ctx = malloc(sizeof(fz_locks_context));
-	lock_ctx->user = user;
-	lock_ctx->lock = lock;
-	lock_ctx->unlock = unlock;
+	lock_ctx->user = mutex;
+	lock_ctx->lock = lock_mutex;
+	lock_ctx->unlock = unlock_mutex;
 	return lock_ctx;
 }
 */
@@ -57,9 +80,6 @@ import (
 	"path/filepath"
 	"sync"
 	"unsafe"
-
-	"github.com/gen2brain/go-fitz/locks"
-	"github.com/gen2brain/go-fitz/pointer"
 )
 
 // Errors.
@@ -575,21 +595,13 @@ func (f *Document) Close() error {
 }
 
 type CLock struct {
-	// Need to hold onto a reference to the go locks so
-	// they won't be gc'ed before this object's lifetime ends.
-	locks [C.fz_lock_max]sync.Mutex
-
-	ctx interface{}
+	ctx C.struct_fz_locks_context
 }
 
 func newLocks() *CLock {
 	l := &CLock{}
 
-	l.ctx = C.create_fz_locks_context(
-		pointer.Save(&l.locks),
-		(*[0]byte)(locks.LockGo),
-		(*[0]byte)(locks.UnlockGo),
-	)
+	l.ctx = C.create_fz_locks_context()
 
 	return l
 }
