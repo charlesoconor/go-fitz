@@ -35,14 +35,22 @@ fz_document *open_document_with_stream(fz_context *ctx, const char *magic, fz_st
 	return doc;
 }
 
-void lock_mutex(void *user, int lock);
-void unlock_mutex(void *user, int lock);
+extern void lockGo(void *user, int lock);
+extern void unlockGo(void *user, int lock);
+
+void lock_mutex(void *user, int lock) {
+	lockGo(user, lock);
+}
+
+void unlock_mutex(void *user, int lock) {
+	unlockGo(user, lock);
+}
 
 fz_locks_context *create_fz_locks_context(void *user) {
 	fz_locks_context* lock_ctx = malloc(sizeof(fz_locks_context));
 	lock_ctx->user = user;
-	lock_ctx->lock = lock_mutex;
-	lock_ctx->unlock = unlock_mutex;
+	// lock_ctx->lock = lock_mutex;
+	// lock_ctx->unlock = unlock_mutex;
 	return lock_ctx;
 }
 */
@@ -56,6 +64,8 @@ import (
 	"path/filepath"
 	"sync"
 	"unsafe"
+
+	"github.com/gen2brain/go-fitz/pointer"
 )
 
 // Errors.
@@ -578,27 +588,18 @@ type CLock struct {
 	ctx interface{}
 }
 
-func newLocks(numLocks int) *CLock {
+func newLocks() *CLock {
 	locks := &CLock{}
 
 	locks.ctx = C.create_fz_locks_context(
-		unsafe.Pointer(&locks),
+		pointer.Save(&locks.locks),
 	)
 
 	return locks
 }
 
 func (l *CLock) Close() {
+	// pointer.Unref(&l.locks)
 	// C.free(unsafe.Pointer(l.ctx))
 	// C.free(l.ctx)
-}
-
-// export lock_mutex
-func lock(l interface{}, lock int) {
-	l.(*CLock).locks[lock].Lock()
-}
-
-// export unlock_mutex
-func unlock(l interface{}, lock int) {
-	l.(*CLock).locks[lock].Unlock()
 }
