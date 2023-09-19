@@ -557,3 +557,41 @@ func (f *Document) Close() error {
 
 	return nil
 }
+
+type CLock struct {
+	// Need to hold onto a reference to the go locks so
+	// they won't be gc'ed before this object's lifetime ends.
+	locks []sync.Mutex
+
+	ctx *C.struct_fz_locks_context
+}
+
+func newLocks(numLocks int) *CLock {
+	locks := make([]sync.Mutex, numLocks)
+
+	var ctx *C.struct_fz_locks_context
+	ctx = (*C.struct_fz_locks_context)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_fz_locks_context{}))))
+	// ctx.user = locks
+	// ctx.lock = Lock
+	// ctx.unlock = Unlock
+
+	return &CLock{
+		locks: locks,
+		ctx:   ctx,
+	}
+
+}
+
+func (l *CLock) Close() {
+	C.free(unsafe.Pointer(l.ctx))
+	l.ctx = nil
+	l.locks = nil
+}
+
+func Lock(l interface{}, lock int) {
+	l.(*CLock).locks[lock].Lock()
+}
+
+func Unlock(l interface{}, lock int) {
+	l.(*CLock).locks[lock].Unlock()
+}
