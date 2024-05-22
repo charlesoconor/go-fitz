@@ -6,8 +6,10 @@ package fitz
 #cgo CFLAGS: -I./include
 
 #include <mupdf/fitz.h>
+#include <mupdf/fitz/structured-text.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include "quad.h"
 
 const char *fz_version = FZ_VERSION;
 
@@ -74,6 +76,12 @@ fz_locks_context_t* create_fz_locks_context(pthread_mutex_t* mutex) {
 	lock_ctx->lock = lock_mutex;
 	lock_ctx->unlock = unlock_mutex;
 	return lock_ctx;
+}
+
+// This struct uses `type` as a member so jumping back into c to grab the
+// value.
+int stext_block_type(fz_stext_block *block) {
+	return block->type;
 }
 */
 import "C"
@@ -597,6 +605,173 @@ func (f *Document) Bound(pageNumber int) (image.Rectangle, error) {
 	var bounds C.fz_rect
 	bounds = C.fz_bound_page(f.ctx, page)
 	return image.Rect(int(bounds.x0), int(bounds.y0), int(bounds.x1), int(bounds.y1)), nil
+}
+
+type BoundingBox struct {
+	X0, X1, Y0, Y1 float32
+}
+
+type Span struct {
+	Text string      `json:"text"`
+	BBox BoundingBox `json"bbox"`
+}
+
+type Block struct {
+	Number int      `json:"number"`
+	Lines  [][]Span `json:"spans"`
+}
+
+func (f *Document) WordBlocks(pageNumber int) ([]Block, error) {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+
+	if pageNumber >= f.NumPage() {
+		return nil, ErrPageMissing
+	}
+
+	page := C.fz_load_page(f.ctx, f.doc, C.int(pageNumber))
+	defer C.fz_drop_page(f.ctx, page)
+
+	var rect C.fz_rect
+	rect = C.fz_bound_page(f.ctx, page)
+
+	tpage := C.fz_new_stext_page(f.ctx, rect)
+	defer C.fz_drop_stext_page(f.ctx, tpage)
+
+	var opts C.fz_stext_options
+	device := C.fz_new_stext_device(f.ctx, tpage, &opts)
+	defer C.fz_drop_device(f.ctx, device)
+
+	drawMatrix := C.fz_identity
+	C.fz_run_page(f.ctx, page, device, drawMatrix, nil)
+	C.fz_close_device(f.ctx, device)
+
+	pageRect := tpage.mediabox
+	var blocks []Block
+
+	buf := C.fz_new_buffer(f.ctx, 1024)
+	defer C.fz_drop_buffer(f.ctx, buf)
+
+	i := -1
+	// runtime.Breakpoint()
+	for block := tpage.first_block; block != nil; block = block.next {
+		i++
+
+		if C.fz_contains_rect(pageRect, block.bbox) == 0 &&
+			C.fz_is_infinite_rect(pageRect) == 0 {
+			continue
+		}
+
+		if C.fz_is_empty_rect(C.fz_intersect_rect(pageRect, block.bbox)) != 0 &&
+			C.fz_is_infinite_rect(pageRect) == 0 {
+			continue
+		}
+
+		if C.stext_block_type(block) == C.FZ_STEXT_BLOCK_IMAGE {
+			continue
+		}
+
+		blockResult := Block{
+			Number: i,
+		}
+
+		for line := C.first_text_line_from_stest_block(block); line != nil; line = line.next {
+			if C.fz_is_empty_rect(C.fz_intersect_rect(pageRect, line.bbox)) != 0 &&
+				C.fz_is_infinite_rect(pageRect) == 0 {
+				continue
+			}
+
+			blockResult.Lines = append(
+				blockResult.Lines,
+				f.loadSpans(line, buf, pageRect),
+			)
+		}
+
+		blocks = append(blocks, blockResult)
+	}
+
+	return blocks, nil
+}
+
+func (f *Document) loadSpans(
+	line *C.fz_stext_line,
+	buf *C.fz_buffer,
+	pageRect C.fz_rect,
+) []Span {
+	C.fz_clear_buffer(f.ctx, buf)
+
+	// line_rect := C.fz_empty_rect
+	spanRect := C.fz_empty_rect
+
+	type Style struct {
+		Font  string
+		Size  float64
+		Color int
+	}
+
+	oldStyle := Style{
+		Size:  -1,
+		Color: -1,
+	}
+	var spans []Span
+	for ch := line.first_char; ch != nil; ch = ch.next {
+		rect := C.fz_rect_from_quad(C.char_quad(f.ctx, line, ch))
+		if C.fz_contains_rect(pageRect, rect) == 0 &&
+			C.fz_is_infinite_rect(pageRect) == 0 {
+			continue
+		}
+
+		style := Style{
+			Font:  C.GoString(C.fz_font_name(f.ctx, ch.font)),
+			Color: int(ch.color),
+			Size:  float64(ch.size),
+		}
+
+		if oldStyle.Size != style.Size ||
+			oldStyle.Font != style.Font ||
+			oldStyle.Color != style.Color {
+
+			if oldStyle.Size >= 0 && C.fz_is_empty_rect(spanRect) == 0 {
+				size := C.fz_buffer_storage(f.ctx, buf, nil)
+				text := C.GoStringN(C.fz_string_from_buffer(f.ctx, buf), C.int(size))
+				span := Span{
+					Text: text,
+					BBox: BoundingBox{
+						X0: float32(spanRect.x0),
+						X1: float32(spanRect.x1),
+						Y0: float32(spanRect.y0),
+						Y1: float32(spanRect.y1),
+					},
+				}
+				C.fz_clear_buffer(f.ctx, buf)
+				spans = append(spans, span)
+			}
+
+			spanRect = rect
+			oldStyle = style
+		}
+
+		spanRect = C.fz_union_rect(spanRect, rect)
+		C.append_rune(f.ctx, buf, ch.c)
+	}
+
+	if C.fz_is_empty_rect(spanRect) == 0 {
+		size := C.fz_buffer_storage(f.ctx, buf, nil)
+		text := C.GoStringN(C.fz_string_from_buffer(f.ctx, buf), C.int(size))
+		span := Span{
+			Text: text,
+			BBox: BoundingBox{
+				X0: float32(spanRect.x0),
+				X1: float32(spanRect.x1),
+				Y0: float32(spanRect.y0),
+				Y1: float32(spanRect.y1),
+			},
+		}
+		C.fz_clear_buffer(f.ctx, buf)
+
+		spans = append(spans, span)
+	}
+	return spans
 }
 
 // Close closes the underlying fitz document.

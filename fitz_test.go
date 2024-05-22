@@ -1,6 +1,7 @@
 package fitz_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -183,7 +184,7 @@ func TestPNG(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	
+
 	defer doc.Close()
 
 	tmpDir, err := os.MkdirTemp(os.TempDir(), "fitz")
@@ -290,4 +291,30 @@ func TestBound(t *testing.T) {
 	if err != fitz.ErrPageMissing {
 		t.Error(fmt.Errorf("ErrPageMissing not returned got %v", err))
 	}
+}
+
+func TestTextFromPdf(t *testing.T) {
+	doc, err := fitz.New(filepath.Join("testdata", "test.pdf"))
+	if err != nil {
+		t.Error(err)
+	}
+
+	defer doc.Close()
+
+	words, err := doc.WordBlocks(1)
+	if err != nil {
+		t.Error(err)
+	}
+
+	bits, err := json.Marshal(words)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = os.WriteFile("temp.json", bits, 0644)
+	if err != nil {
+		t.Error(err)
+	}
+
+	t.Error("Fail")
 }
